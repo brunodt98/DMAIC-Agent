@@ -5,6 +5,8 @@ Separado do restante do código para facilitar iterações e versionamento do
 comportamento do agente sem tocar na lógica da aplicação.
 """
 
+from __future__ import annotations
+
 from dmaic.core.metodo import FERRAMENTAS, label_campo
 
 CONSULTOR_SYSTEM_PROMPT = """\

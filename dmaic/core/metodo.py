@@ -5,6 +5,8 @@ Só descrição do método. Nada de configuração de página nem de CSS, que s�
 assunto da interface (ver dmaic/ui/theme.py).
 """
 
+from __future__ import annotations
+
 # ─────────────────────────────────────────────────────────────────
 # ETAPAS
 # ─────────────────────────────────────────────────────────────────

@@ -5,24 +5,19 @@ Execute: streamlit run app.py
 
 import streamlit as st
 
-from dmaic.config import PAGE_CONFIG, CUSTOM_CSS
 from dmaic.state import init_state
-from dmaic.ui.sidebar import render_sidebar
-from dmaic.ui.header import render_header, render_etapa_bar
-from dmaic.ui.chat import render_chat, handle_user_input
+from dmaic.ui.chat import handle_user_input, render_chat, responder_se_pendente
+from dmaic.ui.header import render_etapa_bar, render_header
 from dmaic.ui.onboarding import render_onboarding
+from dmaic.ui.sidebar import render_sidebar
+from dmaic.ui.theme import CUSTOM_CSS, PAGE_CONFIG
 
-# ── Configuração da página ────────────────────────────────────────
 st.set_page_config(**PAGE_CONFIG)
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# ── Estado global ─────────────────────────────────────────────────
 init_state()
 
-# ── Sidebar (sempre visível) ──────────────────────────────────────
 render_sidebar()
-
-# ── Cabeçalho ─────────────────────────────────────────────────────
 render_header()
 
 # ── Onboarding (tela inicial) ─────────────────────────────────────
@@ -30,9 +25,11 @@ if not st.session_state.pronto:
     render_onboarding()
     st.stop()
 
-# ── Barra de progresso DMAIC ──────────────────────────────────────
+# ── Sessão de consultoria ─────────────────────────────────────────
 render_etapa_bar()
-
-# ── Chat principal ────────────────────────────────────────────────
 render_chat()
+
+# A resposta é gerada depois do histórico para entrar no fim da conversa,
+# em fluxo, sem duplicar a última mensagem na tela.
+responder_se_pendente()
 handle_user_input()

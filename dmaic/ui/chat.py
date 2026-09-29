@@ -1,90 +1,159 @@
 """
-ui/chat.py — Renderização do histórico de chat e tratamento de input do usuário.
+ui/chat.py — Histórico da conversa, entrada do usuário e resposta em fluxo.
+
+A resposta do consultor termina com um rodapé de marcadores que a aplicação
+usa para saber a etapa e as ferramentas. Ele é filtrado antes de chegar à
+tela: o usuário nunca deve ver o maquinário.
 """
+
+from __future__ import annotations
+
+import re
+from typing import Iterator
 
 import streamlit as st
 
-from dmaic.ai import ai_chat, extrair_dados, detectar_ferramentas, detectar_etapa
-from dmaic.document import gerar_word
-from dmaic.state import set_etapa, registrar_ferramenta
-from dmaic.config import ETAPAS
+from dmaic import state
+from dmaic.core import agent
+from dmaic.core.export.word import gerar_word
+from dmaic.core.llm import LLMError
+
+# Ícones Material do próprio Streamlit. Um caractere que não seja emoji — "◉",
+# por exemplo — é interpretado como caminho de imagem e derruba o chat.
+AVATAR_CONSULTOR = ":material/support_agent:"
+AVATAR_USUARIO = ":material/person:"
+
+_RE_RODAPE = re.compile(
+    r"\[\s*(?:ETAPA|FERRAMENTAS?|AGUARDANDO[_ ]CAMPO)\s*:[^\]]*\]\s*", re.I)
 
 
 def render_chat() -> None:
     """Exibe todo o histórico de mensagens."""
     for msg in st.session_state.chat:
-        avatar = "🎯" if msg["role"] == "assistant" else "👤"
+        avatar = AVATAR_CONSULTOR if msg["role"] == "assistant" else AVATAR_USUARIO
         with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(msg["content"])
 
 
 def handle_user_input() -> None:
-    """Captura o input, chama a IA e atualiza o estado."""
-    user_text = st.chat_input("Responda ou faça uma pergunta...")
-
-    if not user_text or not user_text.strip():
+    """Captura a mensagem do usuário e devolve o controle para exibi-la."""
+    texto = st.chat_input("Responda ou faça uma pergunta...")
+    if not texto or not texto.strip():
         return
 
-    # Usuário respondeu → não está mais aguardando campo
-    if st.session_state.get("aguardando_campo"):
-        st.session_state.aguardando_campo = False
+    state.adicionar_mensagem("user", texto.strip())
+    # O usuário voltou a falar: some com o aviso de espera antes de responder.
+    st.session_state.aguardando_campo = False
+    st.rerun()
 
-    # Exibe mensagem do usuário
-    st.session_state.chat.append({"role": "user", "content": user_text})
-    with st.chat_message("user", avatar="👤"):
-        st.markdown(user_text)
 
-    # Chama o consultor
-    with st.chat_message("assistant", avatar="🎯"):
-        with st.spinner("Consultando..."):
-            resposta = ai_chat()
-        st.markdown(resposta)
+def responder_se_pendente() -> None:
+    """
+    Responde quando a última mensagem é do usuário.
 
-    st.session_state.chat.append({"role": "assistant", "content": resposta})
+    Fazer isso aqui, e não dentro do handler da entrada, mantém uma única
+    ordem de renderização: histórico primeiro, resposta nova no fim.
+    """
+    chat = st.session_state.chat
+    if not chat or chat[-1]["role"] != "user":
+        return
 
-    # ── Pós-processamento da resposta ─────────────────────────────
-    _atualizar_etapa(resposta)
-    _registrar_ferramentas(resposta)
-    _acionar_protocolo_campo(resposta)
+    mensagens = agent.montar_mensagens(
+        chat=chat,
+        projeto=st.session_state.projeto,
+        etapa=st.session_state.etapa,
+        ferramentas=st.session_state.ferramentas_usadas,
+        aguardando=st.session_state.aguardando_campo,
+        meta=st.session_state.meta,
+    )
+
+    with st.chat_message("assistant", avatar=AVATAR_CONSULTOR):
+        bruto: list[str] = []
+        try:
+            pedacos = _capturar(agent.responder_stream(state.credenciais(), mensagens),
+                                bruto)
+            st.write_stream(_sem_rodape(pedacos))
+        except LLMError as erro:
+            st.error(str(erro))
+            if not bruto:
+                return
+
+    resposta = "".join(bruto)
+    if not resposta.strip():
+        st.warning("O modelo devolveu uma resposta vazia. Tente enviar de novo.")
+        return
+
+    sinais = agent.ler_sinais(resposta)
+    state.adicionar_mensagem("assistant", sinais.texto)
+    state.aplicar_sinais(sinais)
+
+    if sinais.aguardando_campo:
+        _preparar_documento_de_campo()
 
     st.rerun()
 
 
 # ─────────────────────────────────────────────────────────────────
-# HELPERS INTERNOS
+# FLUXO DE TEXTO
 # ─────────────────────────────────────────────────────────────────
-def _atualizar_etapa(resposta: str) -> None:
-    """Detecta e avança a etapa com base na resposta do agente."""
-    nova = detectar_etapa(st.session_state.chat)
-    set_etapa(nova)
+def _capturar(pedacos: Iterator[str], destino: list[str]) -> Iterator[str]:
+    """Repassa o fluxo guardando o texto bruto, marcadores incluídos."""
+    for pedaco in pedacos:
+        destino.append(pedaco)
+        yield pedaco
 
 
-def _registrar_ferramentas(resposta: str) -> None:
-    """Detecta e registra ferramentas aplicadas na resposta."""
-    for ferramenta in detectar_ferramentas(resposta):
-        registrar_ferramenta(ferramenta)
-
-
-def _acionar_protocolo_campo(resposta: str) -> None:
+def _sem_rodape(pedacos: Iterator[str]) -> Iterator[str]:
     """
-    Quando o agente gera um Plano de Campo:
-    - Marca que está aguardando retorno
-    - Extrai dados da conversa
-    - Gera o documento Word automaticamente
-    - Exibe um toast ao usuário
+    Fluxo sem o rodapé de controle.
+
+    Segura o texto a partir de um "[" em início de linha — onde o rodapé
+    começa — para o marcador não piscar na tela antes de ser removido. Se o
+    que ficou retido não era rodapé, sai no fim, inteiro.
     """
-    if "plano de campo" not in resposta.lower():
-        return
+    retido = ""
+    for pedaco in pedacos:
+        retido += pedaco
+        corte = retido.find("\n[")
+        if corte == -1:
+            yield retido
+            retido = ""
+        elif corte > 0:
+            yield retido[:corte]
+            retido = retido[corte:]
 
-    st.session_state.aguardando_campo = True
+    resto = _RE_RODAPE.sub("", retido).rstrip()
+    if resto:
+        yield resto
 
-    with st.spinner("📄 Gerando documento de campo..."):
-        dados = extrair_dados(st.session_state.chat)
-        if dados:
-            st.session_state.projeto.update(dados)
-        st.session_state.word_bytes = gerar_word()
 
-    st.toast(
-        "📄 Documento pronto! Clique em **Baixar .docx** na barra lateral.",
-        icon="✅",
-    )
+# ─────────────────────────────────────────────────────────────────
+# PROTOCOLO DE CAMPO
+# ─────────────────────────────────────────────────────────────────
+def _preparar_documento_de_campo() -> None:
+    """
+    Ao emitir o Plano de Campo, apura os dados e deixa o .docx pronto.
+
+    Falha aqui não pode derrubar a conversa: o usuário ainda pode gerar o
+    documento manualmente pela barra lateral.
+    """
+    with st.spinner("Preparando o documento de campo..."):
+        try:
+            dados = agent.extrair_dados(state.credenciais(), st.session_state.chat)
+            state.atualizar_projeto(dados)
+        except LLMError as erro:
+            st.warning(f"Não consegui apurar os dados agora: {erro}")
+
+        try:
+            st.session_state.word_bytes = gerar_word(
+                projeto=st.session_state.projeto,
+                meta=st.session_state.meta,
+                chat=st.session_state.chat,
+                etapa=st.session_state.etapa,
+                ferramentas=st.session_state.ferramentas_usadas,
+            )
+        except Exception as erro:  # python-docx falha de formas variadas
+            st.warning(f"Não consegui montar o Word agora: {erro}")
+            return
+
+    st.toast("Documento de campo pronto — baixe na barra lateral.", icon="📄")

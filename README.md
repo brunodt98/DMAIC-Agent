@@ -42,18 +42,23 @@ dmaic_agent/
 │
 ├── dmaic/                    # Pacote principal
 │   ├── __init__.py
-│   ├── config.py             # Constantes, CSS, roadmap, mapeamento de ferramentas
-│   ├── state.py              # Inicialização e gestão do session_state
-│   ├── prompt.py             # System prompt do consultor (separado para versionamento)
-│   ├── ai.py                 # Todas as chamadas à API Groq
-│   ├── document.py           # Gerador do documento Word (.docx)
+│   ├── state.py              # Única ponte com o session_state do Streamlit
+│   │
+│   ├── core/                 # Núcleo — não conhece Streamlit
+│   │   ├── metodo.py         # O método DMAIC como dado: etapas, ferramentas, campos
+│   │   ├── llm.py            # Acesso aos provedores (Groq e OpenRouter)
+│   │   ├── prompt.py         # System prompt do consultor
+│   │   ├── agent.py          # O consultor: o que pedir e como ler a resposta
+│   │   └── export/
+│   │       └── word.py       # Gerador do documento Word (.docx)
 │   │
 │   └── ui/                   # Componentes de interface
 │       ├── __init__.py
-│       ├── sidebar.py        # Barra lateral: API key, upload, progresso, exportação
+│       ├── theme.py          # Configuração da página e CSS
+│       ├── sidebar.py        # Provedor, modelo, retomada, progresso, exportação
 │       ├── header.py         # Cabeçalho e barra de progresso DMAIC
 │       ├── onboarding.py     # Tela inicial de cadastro do projeto
-│       └── chat.py           # Histórico de chat e tratamento de input
+│       └── chat.py           # Conversa e resposta em fluxo
 │
 ├── docs/
 │   └── product_spec.md       # Especificação completa do produto
@@ -73,7 +78,9 @@ dmaic_agent/
 ### Pré-requisitos
 
 - Python 3.11+
-- Conta gratuita no [Groq Console](https://console.groq.com/keys) para obter a API Key
+- Uma chave de API de um dos provedores suportados:
+  [Groq](https://console.groq.com/keys) (gratuita) ou
+  [OpenRouter](https://openrouter.ai/settings/keys) (tem modelos gratuitos)
 
 ### Passos
 
@@ -102,23 +109,23 @@ A aplicação abrirá em `http://localhost:8501`.
 
 ### API Key
 
-Na barra lateral da aplicação, insira sua API Key do Groq. Ela **não é armazenada** em nenhum arquivo — permanece apenas na sessão do navegador.
+Na barra lateral, escolha o provedor e cole sua chave. Ela **não é armazenada** em
+nenhum arquivo — permanece apenas na sessão do navegador, e sobrevive a "Novo
+projeto" para você não precisar digitar de novo.
 
-Para configuração persistente (opcional), crie o arquivo `.streamlit/secrets.toml`:
-
-```toml
-GROQ_API_KEY = "sua-chave-aqui"
-```
+| Provedor | Onde obter | Observação |
+|---|---|---|
+| Groq | [console.groq.com/keys](https://console.groq.com/keys) | Gratuito e rápido |
+| OpenRouter | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) | Muitos modelos, vários gratuitos |
 
 ### Modelo LLM
 
-O modelo padrão é `llama-3.3-70b-versatile`. Outros modelos disponíveis:
+A lista de modelos é buscada no provedor no momento em que você informa a chave,
+não fica escrita no código. Modelo descontinuado simplesmente deixa de aparecer,
+em vez de devolver um erro 404 no meio da conversa.
 
-| Modelo | Característica |
-|---|---|
-| `llama-3.3-70b-versatile` | Recomendado — melhor equilíbrio qualidade/velocidade |
-| `llama3-70b-8192` | Contexto maior, mais lento |
-| `mixtral-8x7b-32768` | Contexto muito grande, bom para conversas longas |
+O seletor mostra o tamanho do contexto de cada modelo e marca os gratuitos. A
+primeira opção é a recomendada para o provedor escolhido.
 
 ---
 
@@ -140,7 +147,7 @@ O modelo padrão é `llama-3.3-70b-versatile`. Outros modelos disponíveis:
 
 ### Retomando um projeto existente
 
-1. Na barra lateral, clique em **📂 Retomar projeto**
+1. Na barra lateral, vá em **Retomar projeto**
 2. Faça upload do `.docx` gerado anteriormente
 3. O consultor lê o documento, identifica onde parou e continua
 
@@ -150,11 +157,14 @@ O modelo padrão é `llama-3.3-70b-versatile`. Outros modelos disponíveis:
 
 | Decisão | Motivo |
 |---|---|
-| `prompt.py` separado de `ai.py` | Permite iterar no comportamento do agente sem tocar na lógica de chamada |
-| `config.py` centralizado | Todas as constantes em um lugar — roadmap, ferramentas, campos — evita magic strings espalhadas |
-| `state.py` isolado | Inicialização e mutação do estado em funções nomeadas, não inline |
+| `core/` sem Streamlit | O núcleo recebe estado por parâmetro e devolve valores, então dá para testá-lo sem subir a aplicação |
+| `state.py` como única ponte | Um só dono do `session_state`; o resto do código não escreve nele por conta própria |
+| `core/prompt.py` separado de `core/agent.py` | Permite iterar no comportamento do agente sem tocar na lógica de chamada |
+| `core/metodo.py` | O método DMAIC como dado — etapas, ferramentas, campos — em vez de strings espalhadas pelo código |
+| Rodapé de marcadores na resposta | O consultor declara etapa e ferramentas aplicadas; detectar por palavra-chave fazia o app pular de etapa só porque a palavra "medir" apareceu numa frase |
+| Modelos buscados no provedor | Lista fixa no código envelhece e o usuário recebe 404 sem explicação |
 | Subpacote `ui/` | Cada componente visual tem responsabilidade única e pode ser testado isoladamente |
-| `document.py` com classe `DocBuilder` | Helpers reutilizáveis; o documento cresce sem duplicar código de formatação |
+| `core/export/word.py` com classe `DocBuilder` | Helpers reutilizáveis; o documento cresce sem duplicar código de formatação |
 
 ---
 

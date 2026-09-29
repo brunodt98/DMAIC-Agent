@@ -1,173 +1,316 @@
 """
-ui/sidebar.py — Barra lateral: API key, modelo, upload, progresso e exportação.
+ui/sidebar.py — Provedor e modelo, retomada de projeto, progresso e exportação.
 """
+
+from __future__ import annotations
+
+import io
+import json
 
 import streamlit as st
 
-from dmaic.ai import extrair_dados, detectar_etapa
-from dmaic.document import gerar_word
-from dmaic.state import reset_state
-from dmaic.config import GROQ_MODELS, ETAPAS, ETAPAS_META
-
-
-def _ler_docx_bytes(file_bytes: bytes) -> dict:
-    """Lê tabelas e texto de um .docx existente."""
-    import io
-    from docx import Document
-
-    doc   = Document(io.BytesIO(file_bytes))
-    dados = {}
-    for table in doc.tables:
-        for row in table.rows:
-            if len(row.cells) >= 2:
-                k = row.cells[0].text.strip()
-                v = row.cells[1].text.strip()
-                if k and v and len(v) > 2:
-                    dados[k[:60]] = v
-    texto = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-    return {"tabelas": dados, "texto": texto[:3000]}
+from dmaic import state
+from dmaic.core import agent, llm
+from dmaic.core.export.word import gerar_word, nome_arquivo
+from dmaic.core.llm import PROVIDERS, LLMError
+from dmaic.core.metodo import (
+    ETAPAS,
+    ETAPAS_META,
+    campo_meta_por_label,
+    campo_por_label,
+    indice_etapa,
+)
 
 
 def render_sidebar() -> None:
     with st.sidebar:
-        st.markdown("## 🎯 DMAIC Agent")
+        st.markdown("## DMAIC Agent")
         st.caption("Consultor Six Sigma com IA")
         st.divider()
 
-        # ── API Key e modelo ──────────────────────────────────────
-        key_in = st.text_input(
-            "🔑 API Key Groq", type="password",
-            help="Gratuita em https://console.groq.com/keys")
-        if key_in:
-            st.session_state.groq_key = key_in
-            st.success("✅ Conectado!")
-
-        st.session_state.model = st.selectbox(
-            "Modelo LLM", GROQ_MODELS, label_visibility="collapsed")
-
+        _render_conexao()
         st.divider()
+        _render_retomada()
 
-        # ── Retomar projeto existente ─────────────────────────────
-        st.markdown("**📂 Retomar projeto**")
-        uploaded = st.file_uploader(
-            "Carregar .docx gerado anteriormente",
-            type=["docx"], label_visibility="collapsed")
-
-        if uploaded and st.button("📥 Carregar e continuar",
-                                  use_container_width=True):
-            import json
-            from dmaic.ai import ai_chat
-
-            with st.spinner("Lendo documento..."):
-                lido = _ler_docx_bytes(uploaded.read())
-
-            ctx = (
-                f"O usuário retornou com um documento DMAIC existente.\n"
-                f"Dados encontrados:\n"
-                f"{json.dumps(lido['tabelas'], ensure_ascii=False)[:2000]}\n"
-                f"Texto adicional: {lido['texto'][:600]}\n\n"
-                f"Analise o que já foi feito, identifique onde o projeto está "
-                f"e o que está incompleto. Faça um briefing em 3 parágrafos: "
-                f"(1) o que já foi construído, (2) o que ficou pendente, "
-                f"(3) próximo passo mais importante. "
-                f"Depois conduza diretamente. NÃO faça mais de 1 pergunta."
-            )
-            for k, v in lido["tabelas"].items():
-                st.session_state.projeto[k[:40]] = v
-
-            with st.spinner("Analisando projeto retomado..."):
-                resposta = ai_chat(extra_ctx=ctx)
-
-            st.session_state.chat             = [{"role": "assistant", "content": resposta}]
-            st.session_state.pronto           = True
-            st.session_state.aguardando_campo = False
-            st.rerun()
-
-        st.divider()
-
-        # ── Status e progresso (só após onboarding) ───────────────
         if st.session_state.pronto:
+            st.divider()
             _render_status()
             st.divider()
             _render_export()
 
         st.divider()
-
-        if st.button("🔄 Novo projeto", use_container_width=True):
-            reset_state()
+        if st.button("Novo projeto", use_container_width=True):
+            state.reset_projeto()
             st.rerun()
 
-        st.caption("DMAIC Agent v4 · FATEC Cotia × Outtech Services IT")
+        st.caption("FATEC Cotia × Outtech Services IT")
 
 
+# ─────────────────────────────────────────────────────────────────
+# CONEXÃO COM O PROVEDOR
+# ─────────────────────────────────────────────────────────────────
+def _ao_trocar_provedor() -> None:
+    """Modelo de um provedor não existe no outro — zera a escolha."""
+    st.session_state.model = ""
+    llm.limpar_cache_modelos()
+
+
+def _render_conexao() -> None:
+    ids = list(PROVIDERS)
+    st.selectbox(
+        "Provedor",
+        ids,
+        key="provider",
+        format_func=lambda i: PROVIDERS[i].label,
+        on_change=_ao_trocar_provedor,
+    )
+    prov = PROVIDERS[st.session_state.provider]
+
+    st.text_input(
+        f"Chave da {prov.label}",
+        type="password",
+        key="api_key",
+        placeholder=f"{prov.key_prefix}...",
+        help=f"Crie uma chave gratuita em {prov.keys_url}",
+    )
+
+    if not st.session_state.api_key:
+        st.info(f"Cole sua chave da {prov.label} para começar.")
+        st.markdown(f"[Obter chave →]({prov.keys_url})")
+        st.session_state.model = ""
+        return
+
+    _render_seletor_modelo(prov)
+
+
+def _render_seletor_modelo(prov) -> None:
+    """Modelos que a chave alcança, buscados no provedor."""
+    try:
+        modelos = llm.validar_chave(st.session_state.provider,
+                                    st.session_state.api_key)
+    except LLMError as erro:
+        st.error(str(erro))
+        st.session_state.model = ""
+        return
+
+    ids = [m.id for m in modelos]
+    if st.session_state.model not in ids:
+        st.session_state.model = llm.modelo_padrao(modelos)
+
+    rotulos = {m.id: m.descricao() for m in modelos}
+    st.selectbox(
+        "Modelo",
+        ids,
+        key="model",
+        format_func=lambda i: rotulos.get(i, i),
+    )
+    st.caption(f"Conectado · {len(ids)} modelos disponíveis nesta chave")
+
+
+# ─────────────────────────────────────────────────────────────────
+# RETOMAR PROJETO
+# ─────────────────────────────────────────────────────────────────
+def _ler_docx(file_bytes: bytes) -> dict:
+    """
+    Campos e texto de um .docx gerado pela própria ferramenta.
+
+    As tabelas são pares rótulo → valor, então os rótulos voltam a ser nomes
+    de campo. Sem essa tradução o projeto retomado ficava com chaves que o
+    gerador do Word não reconhece, e o documento seguinte saía em branco.
+    """
+    from docx import Document
+
+    doc = Document(io.BytesIO(file_bytes))
+    campos: dict[str, str] = {}
+    identificacao: dict[str, str] = {}
+    avulsos: dict[str, str] = {}
+
+    for tabela in doc.tables:
+        for linha in tabela.rows:
+            if len(linha.cells) < 2:
+                continue
+            rotulo = linha.cells[0].text.strip()
+            valor = linha.cells[1].text.strip()
+            if not rotulo or not valor or valor in ("Não informado", "—"):
+                continue
+            if campo := campo_por_label(rotulo):
+                campos[campo] = valor
+            elif campo := campo_meta_por_label(rotulo):
+                identificacao[campo] = valor
+            else:
+                avulsos[rotulo[:60]] = valor
+
+    # A capa traz "EMPRESA  |  DMAIC PROJECT CHARTER" numa célula só.
+    for tabela in doc.tables:
+        primeira = tabela.rows[0].cells[0].text
+        if "DMAIC PROJECT CHARTER" in primeira:
+            empresa = primeira.split("|")[0].strip()
+            if empresa:
+                identificacao.setdefault("empresa", empresa)
+            break
+
+    texto = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    return {
+        "campos": campos,
+        "identificacao": identificacao,
+        "avulsos": avulsos,
+        "texto": texto[:4000],
+    }
+
+
+def _render_retomada() -> None:
+    st.markdown("**Retomar projeto**")
+    enviado = st.file_uploader(
+        "Carregar .docx gerado anteriormente",
+        type=["docx"],
+        label_visibility="collapsed",
+    )
+    if not enviado:
+        return
+
+    if not state.configurado():
+        st.warning("Configure a chave antes de retomar um projeto.")
+        return
+
+    if not st.button("Carregar e continuar", use_container_width=True):
+        return
+
+    try:
+        with st.spinner("Lendo documento..."):
+            lido = _ler_docx(enviado.read())
+    except Exception as erro:  # arquivo corrompido, formato inesperado
+        st.error(f"Não consegui ler esse .docx: {erro}")
+        return
+
+    if not lido["campos"] and not lido["texto"]:
+        st.error("Esse documento não tem dados de projeto reconhecíveis.")
+        return
+
+    st.session_state.projeto.update(lido["campos"])
+    # Identificação só é sobrescrita onde ainda estava vazia.
+    for campo, valor in lido["identificacao"].items():
+        st.session_state.meta.setdefault(campo, valor)
+
+    contexto = (
+        "O usuário retornou com um documento DMAIC já existente.\n"
+        f"Campos reconhecidos: "
+        f"{json.dumps(lido['campos'], ensure_ascii=False)[:2500]}\n"
+        f"Identificação: "
+        f"{json.dumps(lido['identificacao'], ensure_ascii=False)[:500]}\n"
+        f"Outros dados do documento: "
+        f"{json.dumps(lido['avulsos'], ensure_ascii=False)[:1000]}\n"
+        f"Texto do documento: {lido['texto'][:1500]}\n\n"
+        "Faça um briefing em 3 parágrafos: (1) o que já foi construído, "
+        "(2) o que ficou pendente, (3) o próximo passo mais importante. "
+        "Depois conduza com UMA pergunta só."
+    )
+
+    mensagens = agent.montar_mensagens(
+        chat=[{"role": "user",
+               "content": "Retomei o projeto. Onde paramos?"}],
+        projeto=st.session_state.projeto,
+        etapa=st.session_state.etapa,
+        ferramentas=st.session_state.ferramentas_usadas,
+        aguardando=False,
+        meta=st.session_state.meta,
+        extra_ctx=contexto,
+    )
+
+    try:
+        with st.spinner("Analisando o projeto retomado..."):
+            resposta = agent.responder(state.credenciais(), mensagens)
+    except LLMError as erro:
+        st.error(str(erro))
+        return
+
+    sinais = agent.ler_sinais(resposta)
+    st.session_state.chat = [{"role": "assistant", "content": sinais.texto}]
+    st.session_state.pronto = True
+    state.aplicar_sinais(sinais)
+    st.rerun()
+
+
+# ─────────────────────────────────────────────────────────────────
+# STATUS
+# ─────────────────────────────────────────────────────────────────
 def _render_status() -> None:
-    """Exibe status atual e progresso das etapas."""
-    if st.session_state.get("aguardando_campo"):
-        st.warning("⏸️ **Aguardando retorno do campo**")
-        st.caption("Carregue o .docx preenchido ou continue a conversa com os dados.")
+    if st.session_state.aguardando_campo:
+        st.warning("**Aguardando retorno do campo**")
+        st.caption("Carregue o .docx preenchido ou continue a conversa com "
+                   "os dados.")
     else:
-        st.info(f"▶️ Etapa: **{st.session_state.etapa.upper()}**")
+        atual = ETAPAS_META[st.session_state.etapa]
+        st.info(f"Etapa: **{atual['label'].upper()}**")
+        st.caption(atual["resumo"])
 
-    st.markdown("**Progresso:**")
-    atual   = st.session_state.etapa
-    atual_i = ETAPAS.index(atual)
-    for i, e in enumerate(ETAPAS):
-        emoji = ETAPAS_META[e]["emoji"]
-        label = ETAPAS_META[e]["label"]
+    st.markdown("**Progresso**")
+    atual_i = indice_etapa(st.session_state.etapa)
+    for i, etapa in enumerate(ETAPAS):
+        meta = ETAPAS_META[etapa]
+        rotulo = f"{meta['letra']} · {meta['label']}"
         if i < atual_i:
-            st.markdown(f"✅ {emoji} {label}")
-        elif e == atual:
-            st.markdown(f"▶️ **{emoji} {label.upper()}**")
+            st.markdown(f"✔ {rotulo}")
+        elif i == atual_i:
+            st.markdown(f"▶ **{rotulo.upper()}**")
         else:
-            st.markdown(f"⏳ {emoji} {label}")
+            st.caption(f"○ {rotulo}")
 
-    ferramentas = st.session_state.get("ferramentas_usadas", [])
+    ferramentas = st.session_state.ferramentas_usadas
     if ferramentas:
         st.divider()
-        st.markdown("**🛠️ Ferramentas aplicadas:**")
-        for f in ferramentas:
-            st.caption(f"• {f}")
+        st.markdown(f"**Ferramentas aplicadas** ({len(ferramentas)})")
+        for ferramenta in ferramentas:
+            st.caption(f"• {ferramenta}")
+
+
+# ─────────────────────────────────────────────────────────────────
+# EXPORTAÇÃO
+# ─────────────────────────────────────────────────────────────────
+def _gerar_documento(apurar: bool) -> bool:
+    """Monta o .docx na sessão. Devolve se deu certo."""
+    if apurar:
+        try:
+            dados = agent.extrair_dados(state.credenciais(),
+                                        st.session_state.chat)
+            quantos = state.atualizar_projeto(dados)
+            st.caption(f"{quantos} campos apurados na conversa.")
+        except LLMError as erro:
+            st.warning(f"Não consegui apurar os dados: {erro}")
+
+    try:
+        st.session_state.word_bytes = gerar_word(
+            projeto=st.session_state.projeto,
+            meta=st.session_state.meta,
+            chat=st.session_state.chat,
+            etapa=st.session_state.etapa,
+            ferramentas=st.session_state.ferramentas_usadas,
+        )
+    except Exception as erro:
+        st.error(f"Falha ao montar o documento: {erro}")
+        return False
+    return True
 
 
 def _render_export() -> None:
-    """Botões de atualização e exportação do documento Word."""
-    st.markdown("**📥 Exportar**")
+    st.markdown("**Exportar**")
 
-    if st.button("🔄 Atualizar dados", use_container_width=True):
-        with st.spinner("Extraindo dados da conversa..."):
-            dados = extrair_dados(st.session_state.chat)
-            if dados:
-                st.session_state.projeto.update(dados)
-            st.session_state.etapa = detectar_etapa(st.session_state.chat)
-        st.success(f"✅ {len(dados)} campos atualizados!")
+    if st.button("Gerar Word", use_container_width=True, type="primary",
+                 disabled=not state.configurado()):
+        with st.spinner("Montando o documento..."):
+            if _gerar_documento(apurar=True):
+                st.success("Documento pronto.")
 
-    if st.button("📄 Gerar Word", use_container_width=True, type="primary"):
-        with st.spinner("Gerando documento Black Belt..."):
-            dados = extrair_dados(st.session_state.chat)
-            if dados:
-                st.session_state.projeto.update(dados)
-            st.session_state.word_bytes = gerar_word()
-        st.success("✅ Documento pronto!")
+    if not st.session_state.word_bytes:
+        return
 
-    if st.session_state.word_bytes:
-        nome = st.session_state.projeto.get(
-            "titulo",
-            st.session_state.projeto.get("problema", "projeto")
-        )[:25].replace(" ", "_")
+    if st.session_state.aguardando_campo:
+        st.info("Documento de campo pronto — leve para o campo.")
 
-        tem_plano = any(
-            "plano de campo" in m["content"].lower()
-            for m in st.session_state.chat
-            if m["role"] == "assistant"
-        )
-        if tem_plano:
-            st.info("📋 Documento de campo pronto — leve para o campo!")
-
-        st.download_button(
-            "⬇️ Baixar .docx",
-            data=st.session_state.word_bytes,
-            file_name=f"DMAIC_{nome}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True,
-            type="primary" if tem_plano else "secondary",
-        )
+    st.download_button(
+        "Baixar .docx",
+        data=st.session_state.word_bytes,
+        file_name=nome_arquivo(st.session_state.projeto, st.session_state.meta),
+        mime="application/vnd.openxmlformats-officedocument."
+             "wordprocessingml.document",
+        use_container_width=True,
+    )

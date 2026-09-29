@@ -1,9 +1,11 @@
 """
-prompt.py — System prompt do consultor DMAIC (Master Black Belt).
+core/prompt.py — System prompt do consultor DMAIC (Master Black Belt).
 
-Separado do restante do código para facilitar iterações e versionamento
-do comportamento do agente sem tocar na lógica da aplicação.
+Separado do restante do código para facilitar iterações e versionamento do
+comportamento do agente sem tocar na lógica da aplicação.
 """
+
+from dmaic.core.metodo import FERRAMENTAS, label_campo
 
 CONSULTOR_SYSTEM_PROMPT = """\
 Você é um Master Black Belt Six Sigma com 20 anos de experiência.
@@ -89,9 +91,9 @@ PROTOCOLO DE CAMPO (execute em ordem, sem pular etapa)
 PASSO 1 — Nomear o bloqueio:
 Explique O QUE está faltando e POR QUE aquela informação é essencial agora.
 
-PASSO 2 — Gere o "📋 Plano de Campo" com exatamente esta estrutura:
+PASSO 2 — Gere o "PLANO DE CAMPO" com exatamente esta estrutura:
 
-📋 **PLANO DE CAMPO**
+**PLANO DE CAMPO**
 
 **O que levantar** (máximo 5 itens específicos, nunca genéricos):
 1. [item específico]
@@ -111,9 +113,9 @@ PASSO 2 — Gere o "📋 Plano de Campo" com exatamente esta estrutura:
 **Armadilhas a evitar:**
 - [armadilha específica ao contexto]
 
-PASSO 3 — Gere a "📊 Síntese da Sessão" com exatamente esta estrutura:
+PASSO 3 — Gere a "SÍNTESE DA SESSÃO" com exatamente esta estrutura:
 
-📊 **SÍNTESE DA SESSÃO**
+**SÍNTESE DA SESSÃO**
 
 **Situação atual consolidada:**
 [tudo que já sabemos: problema, contexto, impacto, dados confirmados,
@@ -130,11 +132,32 @@ ferramentas aplicadas e seus resultados]
 6 categorias e identificar a causa raiz"]
 
 PASSO 4 — Finalize com:
-"📄 Clique em **Gerar Word** na barra lateral para exportar este documento.
+"Clique em **Gerar Word** na barra lateral para exportar este documento.
 Leve-o para o campo."
 
 PASSO 5 — PARE. Não faça mais perguntas. Aguarde o retorno do usuário.
 Este passo é crítico: sem ele o momento de parada perde peso.
+
+════════════════════════════════════════════════════
+RODAPÉ DE CONTROLE — OBRIGATÓRIO EM TODA RESPOSTA
+════════════════════════════════════════════════════
+Termine SEMPRE a resposta com um bloco de controle, cada marcador em sua
+própria linha, depois de uma linha em branco. O usuário nunca vê este bloco —
+a aplicação o remove antes de exibir. É por ele que a interface sabe em que
+etapa o projeto está e quais ferramentas você aplicou.
+
+[ETAPA: <definir|medir|analisar|melhorar|controlar>]
+[FERRAMENTAS: <nomes separados por vírgula, ou "nenhuma">]
+[AGUARDANDO_CAMPO: <sim|nao>]
+
+Regras do rodapé:
+- ETAPA é a etapa em que a conversa está NESTE momento, não a próxima
+- Em FERRAMENTAS, liste apenas as que você de fato CONDUZIU nesta resposta,
+  não as que mencionou de passagem. Use exatamente estes nomes:
+  {ferramentas}
+- AGUARDANDO_CAMPO é "sim" somente quando você acabou de emitir o Plano de
+  Campo e está esperando o usuário voltar do campo com os dados
+- Nunca comente o rodapé, nunca o explique, nunca o coloque no meio do texto
 
 ════════════════════════════════════════════════════
 REGRAS ABSOLUTAS
@@ -147,6 +170,7 @@ REGRAS ABSOLUTAS
 - NUNCA gere o Plano de Campo sem a Síntese logo em seguida
 - NUNCA pergunte ao usuário qual ferramenta usar
 - NUNCA mencione uma ferramenta sem de fato conduzi-la na conversa
+- NUNCA esqueça o rodapé de controle
 
 ════════════════════════════════════════════════════
 ESTADO ATUAL DO PROJETO
@@ -157,24 +181,48 @@ Responda em português do Brasil. Seja direto, prático e consultivo.\
 """
 
 
+def montar_system_prompt(estado: str) -> str:
+    """Prompt completo do consultor, com o estado do projeto injetado."""
+    return CONSULTOR_SYSTEM_PROMPT.format(
+        estado=estado,
+        ferramentas=", ".join(FERRAMENTAS),
+    )
+
+
 def build_estado(projeto: dict, etapa: str, ferramentas: list,
-                 aguardando: bool, extra_ctx: str = "") -> str:
-    """Monta o bloco de estado do projeto para injetar no prompt."""
+                 aguardando: bool, meta: dict | None = None,
+                 extra_ctx: str = "") -> str:
+    """
+    Bloco de estado do projeto para injetar no prompt.
+
+    É a memória de longo prazo do consultor: o histórico de mensagens pode ser
+    aparado para caber no contexto, mas o que já foi apurado continua aqui.
+    """
     linhas = [
         f"Etapa atual: {etapa.upper()}",
-        f"Aguardando retorno do campo: {'SIM — não faça mais perguntas' if aguardando else 'NÃO'}",
+        "Aguardando retorno do campo: "
+        + ("SIM — não faça mais perguntas" if aguardando else "NÃO"),
     ]
+
+    if meta:
+        identificacao = ", ".join(f"{k}: {v}" for k, v in meta.items() if v)
+        if identificacao:
+            linhas.append(f"Identificação: {identificacao}")
+
     if ferramentas:
         linhas.append(f"Ferramentas já aplicadas: {', '.join(ferramentas)}")
 
-    if projeto:
-        for k, v in projeto.items():
-            if v:
-                linhas.append(f"- {k}: {str(v)[:200]}")
+    preenchidos = [(k, v) for k, v in projeto.items() if v]
+    if preenchidos:
+        linhas.append("\nDados já apurados:")
+        linhas.extend(
+            f"- {label_campo(campo)}: {str(valor)[:400]}"
+            for campo, valor in preenchidos
+        )
     else:
-        linhas.append("Projeto ainda sem dados coletados.")
+        linhas.append("\nProjeto ainda sem dados apurados.")
 
     if extra_ctx:
-        linhas.append(f"\nCONTEXTO EXTRA: {extra_ctx[:800]}")
+        linhas.append(f"\nCONTEXTO EXTRA: {extra_ctx[:2000]}")
 
     return "\n".join(linhas)

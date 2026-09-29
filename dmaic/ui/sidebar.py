@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime
 import io
 import json
+from html import escape
 
 import streamlit as st
 
@@ -24,30 +25,38 @@ from dmaic.core.metodo import (
 )
 
 
+def _secao(titulo: str) -> None:
+    """Título de seção da lateral — menor e mais discreto que um heading."""
+    st.markdown(f'<div class="dmaic-secao">{titulo}</div>',
+                unsafe_allow_html=True)
+
+
 def render_sidebar() -> None:
     with st.sidebar:
-        st.markdown("## DMAIC Agent")
-        st.caption("Consultor Six Sigma com IA")
-        st.divider()
-
+        _secao("Conexão")
         _render_conexao()
+
         st.divider()
+        _secao("Projeto")
         _render_projeto()
-        st.divider()
-        _render_retomada()
 
         if st.session_state.pronto:
             st.divider()
+            _secao("Progresso")
             _render_status()
+
             st.divider()
+            _secao("Documento")
             _render_export()
+
+        st.divider()
+        _secao("Retomar de um Word")
+        _render_retomada()
 
         st.divider()
         if st.button("Novo projeto", use_container_width=True):
             state.reset_projeto()
             st.rerun()
-
-        st.caption("FATEC Cotia × Outtech Services IT")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -115,8 +124,6 @@ def _render_seletor_modelo(prov) -> None:
 # ARQUIVO DE PROJETO
 # ─────────────────────────────────────────────────────────────────
 def _render_projeto() -> None:
-    st.markdown("**Projeto**")
-
     if st.session_state.restaurado_de:
         st.caption(f"Sessão recuperada de {_data_curta(st.session_state.restaurado_de)}")
 
@@ -246,7 +253,6 @@ def _ler_docx(file_bytes: bytes) -> dict:
 
 
 def _render_retomada() -> None:
-    st.markdown("**Retomar projeto**")
     enviado = st.file_uploader(
         "Carregar .docx gerado anteriormente",
         type=["docx"],
@@ -324,31 +330,39 @@ def _render_retomada() -> None:
 def _render_status() -> None:
     if st.session_state.aguardando_campo:
         st.warning("**Aguardando retorno do campo**")
-        st.caption("Carregue o .docx preenchido ou continue a conversa com "
-                   "os dados.")
     else:
-        atual = ETAPAS_META[st.session_state.etapa]
-        st.info(f"Etapa: **{atual['label'].upper()}**")
-        st.caption(atual["resumo"])
+        st.caption(ETAPAS_META[st.session_state.etapa]["resumo"])
 
-    st.markdown("**Progresso**")
-    atual_i = indice_etapa(st.session_state.etapa)
-    for i, etapa in enumerate(ETAPAS):
-        meta = ETAPAS_META[etapa]
-        rotulo = f"{meta['letra']} · {meta['label']}"
-        if i < atual_i:
-            st.markdown(f"✔ {rotulo}")
-        elif i == atual_i:
-            st.markdown(f"▶ **{rotulo.upper()}**")
-        else:
-            st.caption(f"○ {rotulo}")
+    st.markdown(_lista_etapas_html(), unsafe_allow_html=True)
 
     ferramentas = st.session_state.ferramentas_usadas
     if ferramentas:
-        st.divider()
-        st.markdown(f"**Ferramentas aplicadas** ({len(ferramentas)})")
-        for ferramenta in ferramentas:
-            st.caption(f"• {ferramenta}")
+        st.markdown("")
+        _secao(f"Ferramentas aplicadas · {len(ferramentas)}")
+        etiquetas = "".join(
+            f'<span class="dmaic-tag">{escape(f)}</span>' for f in ferramentas
+        )
+        st.markdown(f'<div class="dmaic-tags">{etiquetas}</div>',
+                    unsafe_allow_html=True)
+
+
+def _lista_etapas_html() -> str:
+    atual = indice_etapa(st.session_state.etapa)
+    itens = []
+    for i, etapa in enumerate(ETAPAS):
+        meta = ETAPAS_META[etapa]
+        if i < atual:
+            estado, bolha = "feito", "✓"
+        elif i == atual:
+            estado, bolha = "atual", meta["letra"]
+        else:
+            estado, bolha = "adiante", meta["letra"]
+        itens.append(
+            f'<div class="dmaic-item {estado}">'
+            f'<span class="dmaic-bolha">{bolha}</span>'
+            f'{escape(meta["label"])}</div>'
+        )
+    return f'<div class="dmaic-lista">{"".join(itens)}</div>'
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -380,8 +394,6 @@ def _gerar_documento(apurar: bool) -> bool:
 
 
 def _render_export() -> None:
-    st.markdown("**Exportar**")
-
     if st.button("Gerar Word", use_container_width=True, type="primary",
                  disabled=not state.configurado()):
         with st.spinner("Montando o documento..."):

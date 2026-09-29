@@ -4,15 +4,17 @@ ui/sidebar.py — Provedor e modelo, retomada de projeto, progresso e exportaç�
 
 from __future__ import annotations
 
+import datetime
 import io
 import json
 
 import streamlit as st
 
 from dmaic import state
-from dmaic.core import agent, llm
+from dmaic.core import agent, llm, snapshot
 from dmaic.core.export.word import gerar_word, nome_arquivo
 from dmaic.core.llm import PROVIDERS, LLMError
+from dmaic.core.snapshot import SnapshotInvalido
 from dmaic.core.metodo import (
     ETAPAS,
     ETAPAS_META,
@@ -29,6 +31,8 @@ def render_sidebar() -> None:
         st.divider()
 
         _render_conexao()
+        st.divider()
+        _render_projeto()
         st.divider()
         _render_retomada()
 
@@ -108,7 +112,90 @@ def _render_seletor_modelo(prov) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────
-# RETOMAR PROJETO
+# ARQUIVO DE PROJETO
+# ─────────────────────────────────────────────────────────────────
+def _render_projeto() -> None:
+    st.markdown("**Projeto**")
+
+    if st.session_state.restaurado_de:
+        st.caption(f"Sessão recuperada de {_data_curta(st.session_state.restaurado_de)}")
+
+    if st.session_state.pronto:
+        snap = state.snapshot_atual()
+        st.download_button(
+            "Salvar projeto",
+            data=snapshot.para_bytes(snap),
+            file_name=snapshot.nome_arquivo(snap),
+            mime="application/json",
+            use_container_width=True,
+            help="Baixa o projeto inteiro — conversa, dados e etapa — para "
+                 "abrir depois em qualquer máquina.",
+        )
+
+    arquivo = st.file_uploader(
+        f"Abrir projeto ({snapshot.EXTENSAO})",
+        type=["json"],
+        key="upload_projeto",
+        help="Arquivo salvo por esta aplicação.",
+    )
+    if arquivo is not None:
+        _abrir_projeto(arquivo)
+
+    _render_autosave()
+
+
+def _abrir_projeto(arquivo) -> None:
+    try:
+        snap = snapshot.de_bytes(arquivo.read())
+    except SnapshotInvalido as erro:
+        st.error(str(erro))
+        return
+
+    if snap.vazio():
+        st.error("Esse arquivo não tem nenhum projeto dentro.")
+        return
+
+    st.caption(f"{snap.descricao()} · {len(snap.chat)} mensagens")
+    if not st.button("Abrir este projeto", use_container_width=True,
+                     type="primary"):
+        return
+
+    state.aplicar_snapshot(snap)
+    st.session_state.restaurado_de = snap.salvo_em
+    state.autosave()
+    st.rerun()
+
+
+def _render_autosave() -> None:
+    """
+    Controle do autosave. Só aparece quando a aplicação roda localmente: num
+    servidor compartilhado, gravar a sessão em disco misturaria os projetos de
+    usuários diferentes.
+    """
+    if not state.execucao_local():
+        st.caption(
+            "Autosave indisponível em acesso remoto — salve o projeto em "
+            "arquivo antes de fechar."
+        )
+        return
+
+    st.toggle(
+        "Recuperar sessão após F5",
+        key="autosave_ativo",
+        help=f"Grava a sessão em {snapshot.diretorio_dados()} a cada resposta.",
+    )
+
+
+def _data_curta(iso: str) -> str:
+    """Data ISO no formato que se lê de relance."""
+    try:
+        return datetime.datetime.fromisoformat(iso).strftime("%d/%m às %H:%M")
+    except ValueError:
+        return iso[:16]
+
+
+# ─────────────────────────────────────────────────────────────────
+# RETOMAR PROJETO A PARTIR DO WORD
 # ─────────────────────────────────────────────────────────────────
 def _ler_docx(file_bytes: bytes) -> dict:
     """
@@ -227,6 +314,7 @@ def _render_retomada() -> None:
     st.session_state.chat = [{"role": "assistant", "content": sinais.texto}]
     st.session_state.pronto = True
     state.aplicar_sinais(sinais)
+    state.autosave()
     st.rerun()
 
 

@@ -147,9 +147,35 @@ primeira opção é a recomendada para o provedor escolhido.
 
 ### Retomando um projeto existente
 
+Há dois caminhos, para situações diferentes.
+
+**Arquivo de projeto** — guarda a sessão inteira: conversa, dados apurados,
+etapa e ferramentas aplicadas.
+
+1. Em **Projeto**, clique em **Salvar projeto** e guarde o `.dmaic.json`
+2. Para voltar, faça upload do mesmo arquivo em **Abrir projeto**
+3. A sessão volta exatamente de onde parou
+
+**Documento Word** — para quando o projeto avançou no campo, fora da
+aplicação, e o que existe é o `.docx`.
+
 1. Na barra lateral, vá em **Retomar projeto**
 2. Faça upload do `.docx` gerado anteriormente
 3. O consultor lê o documento, identifica onde parou e continua
+
+### Recuperação após F5
+
+Rodando na sua máquina, a sessão é gravada em disco a cada resposta e volta
+sozinha se você recarregar a página. O aviso *Sessão recuperada* aparece na
+barra lateral, e o interruptor **Recuperar sessão após F5** desliga o
+comportamento.
+
+Os arquivos ficam em `~/.dmaic_agent` (ou no caminho de `DMAIC_DATA_DIR`),
+fora do repositório.
+
+Em acesso remoto o autosave não entra: como a gravação é em disco, num
+servidor compartilhado o projeto de um usuário apareceria para o próximo.
+Nesse caso, salve o projeto em arquivo antes de fechar.
 
 ---
 

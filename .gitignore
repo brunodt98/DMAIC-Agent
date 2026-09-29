@@ -17,7 +17,9 @@ env/
 
 # Arquivos gerados
 *.docx
+*.dmaic.json
 outputs/
+.dmaic_agent/
 
 # Sistema operacional
 .DS_Store

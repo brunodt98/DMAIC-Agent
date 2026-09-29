@@ -68,6 +68,7 @@ def render_onboarding() -> None:
     st.session_state.chat = [
         {"role": "assistant", "content": _mensagem_abertura(responsavel)}
     ]
+    state.autosave()
     st.rerun()
 
 

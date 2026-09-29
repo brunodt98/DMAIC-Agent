@@ -44,6 +44,8 @@ def handle_user_input() -> None:
     state.adicionar_mensagem("user", texto.strip())
     # O usuário voltou a falar: some com o aviso de espera antes de responder.
     st.session_state.aguardando_campo = False
+    # Grava já: se a resposta do modelo falhar, a pergunta não se perde.
+    state.autosave()
     st.rerun()
 
 
@@ -90,6 +92,7 @@ def responder_se_pendente() -> None:
     if sinais.aguardando_campo:
         _preparar_documento_de_campo()
 
+    state.autosave()
     st.rerun()
 
 

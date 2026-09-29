@@ -1,212 +1,183 @@
-# 🎯 DMAIC Agent
+# DMAIC Agent
 
-> Consultor Six Sigma com Inteligência Artificial — conduz projetos de melhoria de processos de forma conversacional, como um Master Black Belt experiente faria numa reunião real.
+Consultor Six Sigma que conduz um projeto de melhoria por conversa, aplica as
+ferramentas certas em cada etapa e — quando falta dado — para de perguntar e
+monta o plano para você ir buscar o que falta no campo.
 
-**Projeto de Bruno Silva — Estudante de Ciência de Dados · FATEC Cotia × Outtech Services IT**
+**Bruno Silva** · Ciência de Dados, FATEC Cotia × Outtech Services IT
 
----
+## Problema
 
-## O que é
+Um projeto DMAIC morre em dois lugares, e nenhum deles é falta de método.
 
-O DMAIC Agent é uma aplicação web que substitui formulários estáticos por uma conversa inteligente. O usuário chega com um problema real — às vezes mal definido, sem todos os dados — e o agente conduz o raciocínio pelas 5 etapas do método DMAIC:
+**O formulário.** As planilhas e templates de Six Sigma pedem baseline, causa
+raiz e meta quantitativa em campos vazios. Quem está começando não sabe o que
+escrever ali, e quem sabe não tem os números à mão. O template não ensina a
+conduzir — ele cobra o resultado de uma condução que ninguém fez.
 
-```
-🎯 DEFINIR → 📏 MEDIR → 🔍 ANALISAR → 🚀 MELHORAR → 📊 CONTROLAR
-```
+**O dado que não existe.** No meio da análise aparece a pergunta que depende de
+uma informação que ninguém levantou: quantas vezes por turno, qual o custo da
+parada, quanto o cliente percebe. Aqui um LLM comum inventa um número plausível
+e o projeto inteiro passa a repousar sobre ele. Em melhoria de processo, um
+baseline errado com cara de certo é pior que nenhum baseline.
 
-Quando o usuário não tem um dado disponível, o agente **para de perguntar**, monta um **Plano de Campo** com as tarefas concretas para ir buscar essa informação, e gera automaticamente um documento Word para levar ao campo.
+Este projeto ataca os dois: conduz a conversa como um Master Black Belt faria
+numa reunião, uma pergunta por vez — e, ao detectar que o dado não existe, troca
+a pergunta por uma tarefa de campo.
 
----
+## Como funciona
 
-## Funcionalidades
-
-| Funcionalidade | Descrição |
-|---|---|
-| **Consulta conversacional** | 1 pergunta por vez, contextualizada ao problema real |
-| **Ferramentas DMAIC aplicadas** | Ishikawa, 5 Porquês, SIPOC, Pareto, FMEA, 5W2H, Funil de Problemas e outras — conduzidas na conversa |
-| **Detecção automática de bloqueio** | Identifica quando o usuário não tem o dado disponível e aciona o Protocolo de Campo |
-| **Plano de Campo** | Documento estruturado com o que levantar, onde, quem faz, como e prazo |
-| **Síntese da Sessão** | Consolida tudo que foi construído + compromisso do próximo passo |
-| **Documento Word automático** | Gerado automaticamente ao acionar o Protocolo de Campo |
-| **Retomada de projeto** | Upload do .docx preenchido — o agente lê, identifica onde parou e continua |
-| **Rastreamento de etapa** | Progresso visual pelas 5 etapas, atualizado automaticamente |
-
----
-
-## Estrutura do projeto
-
-```
-dmaic_agent/
-│
-├── app.py                    # Ponto de entrada — monta a aplicação
-│
-├── dmaic/                    # Pacote principal
-│   ├── __init__.py
-│   ├── state.py              # Única ponte com o session_state do Streamlit
-│   │
-│   ├── core/                 # Núcleo — não conhece Streamlit
-│   │   ├── metodo.py         # O método DMAIC como dado: etapas, ferramentas, campos
-│   │   ├── llm.py            # Acesso aos provedores (Groq e OpenRouter)
-│   │   ├── prompt.py         # System prompt do consultor
-│   │   ├── agent.py          # O consultor: o que pedir e como ler a resposta
-│   │   └── export/
-│   │       └── word.py       # Gerador do documento Word (.docx)
-│   │
-│   └── ui/                   # Componentes de interface
-│       ├── __init__.py
-│       ├── theme.py          # Configuração da página e CSS
-│       ├── sidebar.py        # Provedor, modelo, retomada, progresso, exportação
-│       ├── header.py         # Cabeçalho e barra de progresso DMAIC
-│       ├── onboarding.py     # Tela inicial de cadastro do projeto
-│       └── chat.py           # Conversa e resposta em fluxo
-│
-├── docs/
-│   └── product_spec.md       # Especificação completa do produto
-│
-├── .streamlit/
-│   └── config.toml           # Tema visual da aplicação
-│
-├── requirements.txt
-├── .gitignore
-└── README.md
+```mermaid
+flowchart TD
+    A["Usuário descreve o problema<br/>com as próprias palavras"] --> B["Consultor escolhe e conduz<br/>a ferramenta da etapa"]
+    B --> C{"O usuário tem<br/>o dado?"}
+    C -->|Sim| D["Aprofunda e avança<br/>DEFINIR → MEDIR → ANALISAR → MELHORAR → CONTROLAR"]
+    D --> B
+    C -->|Não| E["Protocolo de Campo"]
+    E --> F["<b>Plano de Campo</b><br/>o que levantar, onde encontrar,<br/>quem faz, como e em quanto tempo"]
+    F --> G["<b>Síntese da Sessão</b><br/>tudo que já foi construído e o<br/>compromisso do que vem no retorno"]
+    G --> H["Documento Word<br/>para levar ao campo"]
+    H --> I["Usuário levanta os dados<br/>no mundo real"]
+    I --> J["Reabre o projeto<br/>.dmaic.json ou o .docx preenchido"]
+    J --> B
 ```
 
----
+O ciclo fecha: o documento que sai da aplicação é o mesmo que volta para ela.
 
-## Instalação e execução
+## O Protocolo de Campo
 
-### Pré-requisitos
+É o que separa esta ferramenta de um chat sobre Six Sigma. O consultor
+identifica sozinho que o usuário travou — disse "não sei", chutou um número,
+ficou vago duas vezes seguidas — e em vez de insistir, produz três coisas e
+para:
 
-- Python 3.11+
-- Uma chave de API de um dos provedores suportados:
-  [Groq](https://console.groq.com/keys) (gratuita) ou
-  [OpenRouter](https://openrouter.ai/settings/keys) (tem modelos gratuitos)
+1. **Plano de Campo** — no máximo cinco itens específicos, cada um com a fonte
+   concreta onde buscar, quem deve fazer, por qual método e em que prazo. Mais
+   as armadilhas daquele levantamento em particular.
+2. **Síntese da Sessão** — o que já se sabe, o que ainda é hipótese, e o
+   compromisso explícito do que o consultor vai conduzir quando os dados
+   chegarem.
+3. **Documento Word** — gerado na hora, com as duas seções acima e a ficha do
+   projeto, pronto para circular entre os responsáveis.
 
-### Passos
+Depois disso o consultor silencia e espera o retorno. Sem esse passo o momento
+de parada perde peso e a conversa volta a cobrar o dado que não existe.
 
-```bash
-# 1. Clone o repositório
-git clone https://github.com/seu-usuario/dmaic-agent.git
-cd dmaic-agent
+## Ferramentas aplicadas
 
-# 2. Crie e ative o ambiente virtual
-python -m venv .venv
-source .venv/bin/activate        # Linux / macOS
-.venv\Scripts\activate           # Windows
-
-# 3. Instale as dependências
-pip install -r requirements.txt
-
-# 4. Execute a aplicação
-streamlit run app.py
-```
-
-A aplicação abrirá em `http://localhost:8501`.
-
----
-
-## Configuração
-
-### API Key
-
-Na barra lateral, escolha o provedor e cole sua chave. Ela **não é armazenada** em
-nenhum arquivo — permanece apenas na sessão do navegador, e sobrevive a "Novo
-projeto" para você não precisar digitar de novo.
-
-| Provedor | Onde obter | Observação |
-|---|---|---|
-| Groq | [console.groq.com/keys](https://console.groq.com/keys) | Gratuito e rápido |
-| OpenRouter | [openrouter.ai/settings/keys](https://openrouter.ai/settings/keys) | Muitos modelos, vários gratuitos |
-
-### Modelo LLM
-
-A lista de modelos é buscada no provedor no momento em que você informa a chave,
-não fica escrita no código. Modelo descontinuado simplesmente deixa de aparecer,
-em vez de devolver um erro 404 no meio da conversa.
-
-O seletor mostra o tamanho do contexto de cada modelo e marca os gratuitos. A
-primeira opção é a recomendada para o provedor escolhido.
-
----
-
-## Como usar
-
-### Iniciando um projeto novo
-
-1. Preencha **Empresa** e **Responsável** (obrigatórios) na tela inicial
-2. Descreva o problema com suas palavras — sem formato específico
-3. Responda as perguntas do consultor; ele conduz tudo
-
-### Quando o consultor acionar o Plano de Campo
-
-1. Leia o Plano de Campo e a Síntese da Sessão
-2. Clique em **Gerar Word** na barra lateral (ou aguarde a geração automática)
-3. Baixe o `.docx` e leve para o campo / envie aos responsáveis
-4. Execute as tarefas levantadas
-5. Volte à aplicação, faça upload do documento preenchido ou continue a conversa
-
-### Retomando um projeto existente
-
-Há dois caminhos, para situações diferentes.
-
-**Arquivo de projeto** — guarda a sessão inteira: conversa, dados apurados,
-etapa e ferramentas aplicadas.
-
-1. Em **Projeto**, clique em **Salvar projeto** e guarde o `.dmaic.json`
-2. Para voltar, faça upload do mesmo arquivo em **Abrir projeto**
-3. A sessão volta exatamente de onde parou
-
-**Documento Word** — para quando o projeto avançou no campo, fora da
-aplicação, e o que existe é o `.docx`.
-
-1. Na barra lateral, vá em **Retomar projeto**
-2. Faça upload do `.docx` gerado anteriormente
-3. O consultor lê o documento, identifica onde parou e continua
-
-### Recuperação após F5
-
-Rodando na sua máquina, a sessão é gravada em disco a cada resposta e volta
-sozinha se você recarregar a página. O aviso *Sessão recuperada* aparece na
-barra lateral, e o interruptor **Recuperar sessão após F5** desliga o
-comportamento.
-
-Os arquivos ficam em `~/.dmaic_agent` (ou no caminho de `DMAIC_DATA_DIR`),
-fora do repositório.
-
-Em acesso remoto o autosave não entra: como a gravação é em disco, num
-servidor compartilhado o projeto de um usuário apareceria para o próximo.
-Nesse caso, salve o projeto em arquivo antes de fechar.
-
----
-
-## Arquitetura de decisões
-
-| Decisão | Motivo |
-|---|---|
-| `core/` sem Streamlit | O núcleo recebe estado por parâmetro e devolve valores, então dá para testá-lo sem subir a aplicação |
-| `state.py` como única ponte | Um só dono do `session_state`; o resto do código não escreve nele por conta própria |
-| `core/prompt.py` separado de `core/agent.py` | Permite iterar no comportamento do agente sem tocar na lógica de chamada |
-| `core/metodo.py` | O método DMAIC como dado — etapas, ferramentas, campos — em vez de strings espalhadas pelo código |
-| Rodapé de marcadores na resposta | O consultor declara etapa e ferramentas aplicadas; detectar por palavra-chave fazia o app pular de etapa só porque a palavra "medir" apareceu numa frase |
-| Modelos buscados no provedor | Lista fixa no código envelhece e o usuário recebe 404 sem explicação |
-| Subpacote `ui/` | Cada componente visual tem responsabilidade única e pode ser testado isoladamente |
-| `core/export/word.py` com classe `DocBuilder` | Helpers reutilizáveis; o documento cresce sem duplicar código de formatação |
-
----
-
-## Ferramentas DMAIC suportadas
+Conduzidas na conversa, não mencionadas de passagem. O consultor escolhe qual
+usar — nunca pergunta ao usuário.
 
 | Etapa | Ferramentas |
 |---|---|
 | **Definir** | Funil de Problemas, SIPOC, VOC, CTQ, Project Charter |
 | **Medir** | Mapa de Processo, Plano de Coleta, Baseline, Pareto, MSA |
 | **Analisar** | Ishikawa (6M), 5 Porquês, Matriz de Priorização, Estratificação |
-| **Melhorar** | Brainstorming, Matriz Esforço×Impacto, FMEA, 5W2H |
+| **Melhorar** | Brainstorming, Matriz Esforço × Impacto, FMEA, 5W2H |
 | **Controlar** | Gráfico de Controle (CEP), Plano de Controle, SOP, Lições Aprendidas |
 
----
+## Instalação
+
+Precisa de Python 3.11+ e de uma chave de API — [Groq](https://console.groq.com/keys)
+é gratuita, [OpenRouter](https://openrouter.ai/settings/keys) tem modelos
+gratuitos.
+
+```bash
+git clone https://github.com/brunodt98/DMAIC-Agent.git
+cd DMAIC-Agent
+
+python -m venv .venv
+source .venv/bin/activate        # Linux / macOS
+.venv\Scripts\activate           # Windows
+
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Abre em `http://localhost:8501`.
+
+## Configuração
+
+Escolha o provedor na barra lateral e cole a chave. Ela fica só na sessão do
+navegador, não é gravada em arquivo nenhum, e sobrevive a "Novo projeto" para
+você não digitar de novo.
+
+A lista de modelos é buscada no provedor no momento em que você informa a chave,
+em vez de ficar escrita no código. Modelo descontinuado simplesmente deixa de
+aparecer, no lugar de devolver um 404 no meio da conversa. O seletor mostra o
+tamanho do contexto de cada um e marca os gratuitos.
+
+## Usando
+
+**Começando.** Informe empresa e responsável, descreva o problema com suas
+palavras e responda as perguntas. Não precisa saber Six Sigma — a condução é do
+consultor.
+
+**Quando o Plano de Campo aparecer.** Leia o plano e a síntese, baixe o `.docx`
+na barra lateral, execute o levantamento e volte com os dados. Continuar a
+conversa normalmente já basta.
+
+**Salvando e retomando.** Dois caminhos, para situações diferentes:
+
+- **Arquivo de projeto** (`.dmaic.json`) — guarda a sessão inteira: conversa,
+  dados apurados, etapa e ferramentas. É o caminho para pausar e voltar depois,
+  ou para levar o projeto para outra máquina.
+- **Documento Word** (`.docx`) — para quando o projeto andou fora da aplicação e
+  o que existe é o documento. O consultor lê, identifica onde parou e faz um
+  briefing antes de continuar.
+
+**Recuperação após F5.** Rodando na sua máquina, a sessão é gravada em disco a
+cada resposta e volta sozinha se você recarregar a página, com um aviso na barra
+lateral. Os arquivos ficam em `~/.dmaic_agent`, ou no caminho de
+`DMAIC_DATA_DIR`. Em acesso remoto o autosave não entra: a gravação é num
+arquivo único, e num servidor compartilhado o projeto de um usuário apareceria
+para o próximo — ali, salve em arquivo antes de fechar.
+
+## Estrutura
+
+```
+app.py                  Ponto de entrada
+dmaic/
+├── state.py            Única ponte com o session_state do Streamlit
+├── core/               Núcleo — não importa streamlit
+│   ├── metodo.py       O método DMAIC como dado: etapas, ferramentas, campos
+│   ├── prompt.py       System prompt do consultor
+│   ├── agent.py        O que pedir ao modelo e como ler a resposta
+│   ├── llm.py          Acesso aos provedores (Groq e OpenRouter)
+│   ├── snapshot.py     Salvar, abrir e autosave do projeto
+│   └── export/word.py  Gerador do .docx
+└── ui/                 theme · header · sidebar · onboarding · chat
+docs/product_spec.md    Especificação do produto
+```
+
+## Decisões de projeto
+
+**O núcleo não conhece a interface.** Tudo em `core/` recebe estado por
+parâmetro e devolve valores, sem tocar em `session_state`. É isso que permite
+testar a geração do documento, a leitura da resposta e a validação de um arquivo
+sem subir a aplicação.
+
+**O consultor declara etapa e ferramentas.** Cada resposta termina num rodapé de
+marcadores que a aplicação lê e remove antes de exibir. A alternativa era
+procurar palavras-chave no texto, e ela falhava de um jeito específico: a frase
+"precisamos medir a frequência", dita durante o DEFINIR, fazia o app pular para
+MEDIR. Ferramenta agora só conta como aplicada quando o consultor diz que a
+conduziu, e um salto de mais de uma etapa por resposta é contido.
+
+**A memória do projeto não vive só no histórico.** O que já foi apurado é
+reinjetado em cada chamada como bloco de estado, separado da conversa. O
+histórico pode ser aparado para caber no contexto sem que o consultor esqueça o
+problema que ele mesmo definiu.
+
+**Arquivo aberto é dado não confiável.** Um `.dmaic.json` pode ter sido editado.
+Campo fora da lista, etapa inexistente e ferramenta desconhecida são descartados
+na leitura, e mensagem com papel diferente de `user` ou `assistant` também — o
+que impede um arquivo preparado de injetar instrução de sistema na conversa.
+
+**A gravação do autosave é atômica.** Escreve num temporário e substitui. Sem
+isso, um F5 no meio da escrita deixaria um arquivo pela metade, e a sessão
+seguinte não conseguiria abrir justamente o que deveria salvá-la.
 
 ## Licença
 
-Este projeto é de uso acadêmico e educacional.  
-**Bruno Silva — FATEC Cotia · Ciência de Dados**
+Uso acadêmico e educacional.
